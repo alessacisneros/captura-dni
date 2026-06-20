@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Captura de DNI</title>
+<script src="https://docs.opencv.org/4.x/opencv.js"></script>
+<style>
+  :root{
+    --ink:#10221b; --paper:#f3efe6; --paper-soft:#e8e2d4; --line:#c9c1ad;
+    --accent:#1f7a5c; --accent-deep:#0f4a37; --warn:#b8742a; --bad:#a23b3b;
+    --good:#1f7a5c; --mono:"SF Mono",ui-monospace,"Roboto Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{background:radial-gradient(120% 80% at 50% -10%, #fbf8f1 0%, var(--paper) 55%, var(--paper-soft) 100%);
+    color:var(--ink);font-family:"Inter",system-ui,-apple-system,sans-serif;min-height:100%;
+    display:flex;flex-direction:column;align-items:center;padding:24px 16px 48px;-webkit-font-smoothing:antialiased;}
+  header{width:100%;max-width:620px;margin-bottom:18px;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent-deep);opacity:.8;}
+  h1{font-size:30px;line-height:1.05;font-weight:680;letter-spacing:-.02em;margin:6px 0 4px;}
+  .sub{font-size:14px;color:#5a6b62;max-width:46ch;}
+  .stage{width:100%;max-width:620px;background:#0c1611;border:1px solid var(--line);border-radius:18px;
+    overflow:hidden;position:relative;aspect-ratio:4/3;box-shadow:0 20px 50px -28px rgba(15,74,55,.6);}
+  video,canvas#work{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas#work{visibility:hidden;}
+  #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+  .idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:16px;color:var(--paper);text-align:center;padding:24px;background:radial-gradient(80% 60% at 50% 40%,#16271f,#0c1611);}
+  .idle p{font-size:13px;color:#9db3a8;max-width:34ch;}
+  .hud{position:absolute;left:12px;right:12px;bottom:12px;display:flex;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;}
+  .chip{background:rgba(8,18,13,.72);border:1px solid rgba(255,255,255,.12);color:#cfe0d8;padding:6px 9px;
+    border-radius:999px;display:flex;align-items:center;gap:6px;backdrop-filter:blur(6px);}
+  .dot{width:7px;height:7px;border-radius:50%;background:#7d8a83;}
+  .dot.ok{background:var(--good);box-shadow:0 0 8px var(--good);}
+  .dot.no{background:var(--bad);}
+  .status{position:absolute;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;
+    align-items:center;font-family:var(--mono);font-size:12px;color:var(--paper);}
+  .status .msg{background:rgba(8,18,13,.72);padding:6px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(6px);}
+  .countdown{background:var(--accent);color:#fff;font-weight:600;padding:6px 11px;border-radius:999px;}
+  .controls{width:100%;max-width:620px;margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  button{font:inherit;font-weight:600;font-size:14px;border:none;border-radius:12px;padding:13px 20px;
+    cursor:pointer;transition:transform .08s ease, background .2s ease, opacity .2s;}
+  button:active{transform:translateY(1px);}
+  .btn-primary{background:var(--accent-deep);color:#fff;}
+  .btn-primary:hover{background:var(--accent);}
+  .btn-ghost{background:transparent;color:var(--accent-deep);border:1px solid var(--line);}
+  button:disabled{opacity:.4;cursor:not-allowed;}
+  .criteria{width:100%;max-width:620px;margin-top:22px;border-top:1px solid var(--line);padding-top:18px;}
+  .criteria h2{font-size:12px;font-family:var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--accent-deep);margin-bottom:12px;}
+  .meters{display:grid;gap:10px;}
+  .meter{display:grid;grid-template-columns:120px 1fr 52px;gap:10px;align-items:center;font-size:13px;}
+  .meter .label{color:#41524a;}
+  .bar{height:8px;background:var(--paper-soft);border-radius:999px;overflow:hidden;border:1px solid var(--line);}
+  .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .12s linear, background .2s;}
+  .meter .val{font-family:var(--mono);font-size:11px;text-align:right;color:#5a6b62;}
+  .result{width:100%;max-width:620px;margin-top:22px;display:none;}
+  .result.show{display:block;}
+  .result h2{font-size:18px;margin-bottom:10px;letter-spacing:-.01em;}
+  .shot{width:100%;border-radius:14px;border:1px solid var(--line);display:block;}
+  .result-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;}
+  .loading-cv{font-family:var(--mono);font-size:12px;color:var(--warn);margin-top:10px;}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">Captura asistida</div>
+  <h1>Escanea tu DNI</h1>
+  <p class="sub">Activa la cámara y sostén el documento frente a ella. La foto se toma sola cuando el encuadre, el enfoque y la luz son correctos.</p>
+</header>
+<div class="stage" id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="work"></canvas>
+  <svg id="overlay" viewBox="0 0 100 75" preserveAspectRatio="none">
+    <rect id="guide" x="12" y="16" width="76" height="43" rx="3" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.6" stroke-dasharray="3 2"/>
+    <polygon id="detected" points="" fill="rgba(31,122,92,0.18)" stroke="#37d39a" stroke-width="0.8"/>
+  </svg>
+  <div class="status" id="statusBar" style="display:none;">
+    <span class="msg" id="statusMsg">Buscando documento…</span>
+    <span class="countdown" id="countdown" style="display:none;">Listo</span>
+  </div>
+  <div class="hud" id="hud" style="display:none;">
+    <span class="chip"><span class="dot" id="d-edges"></span>Bordes</span>
+    <span class="chip"><span class="dot" id="d-focus"></span>Enfoque</span>
+    <span class="chip"><span class="dot" id="d-light"></span>Luz</span>
+    <span class="chip"><span class="dot" id="d-size"></span>Tamaño</span>
+  </div>
+  <div class="idle" id="idle">
+    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#37d39a" stroke-width="1.4">
+      <rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="12.5" r="3.2"/><path d="M8 6l1.2-2h5.6L16 6"/>
+    </svg>
+    <p id="idleMsg">La cámara está apagada. Dale a “Activar cámara” y permite el acceso cuando el navegador lo pida.</p>
+  </div>
+</div>
+<div class="controls">
+  <button class="btn-primary" id="startBtn">Activar cámara</button>
+  <button class="btn-ghost" id="stopBtn" disabled>Detener</button>
+  <button class="btn-ghost" id="manualBtn" disabled>Capturar ahora</button>
+  <span class="loading-cv" id="cvStatus">Cargando motor de visión…</span>
+</div>
+<div class="criteria">
+  <h2>Calidad en vivo</h2>
+  <div class="meters">
+    <div class="meter"><span class="label">Enfoque</span><div class="bar"><i id="m-focus"></i></div><span class="val" id="v-focus">—</span></div>
+    <div class="meter"><span class="label">Luz</span><div class="bar"><i id="m-light"></i></div><span class="val" id="v-light">—</span></div>
+    <div class="meter"><span class="label">Encuadre</span><div class="bar"><i id="m-size"></i></div><span class="val" id="v-size">—</span></div>
+  </div>
+</div>
+<div class="result" id="result">
+  <h2>Captura lista</h2>
+  <img class="shot" id="shot" alt="Captura del DNI">
+  <div class="result-actions">
+    <button class="btn-primary" id="downloadBtn">Descargar imagen</button>
+    <button class="btn-ghost" id="retryBtn">Escanear de nuevo</button>
+  </div>
+</div>
+<script>
+const CFG = {
+  focusMin: 90, brightMin: 60, brightMax: 205,
+  areaMin: 0.18, areaMax: 0.92, stableFrames: 14, processEveryMs: 80,
+};
+let cvReady=false, stream=null, running=false, goodStreak=0, lastProcess=0, captured=false;
+const els={video:document.getElementById('video'),work:document.getElementById('work'),overlay:document.getElementById('overlay'),
+  detected:document.getElementById('detected'),idle:document.getElementById('idle'),idleMsg:document.getElementById('idleMsg'),
+  startBtn:document.getElementById('startBtn'),stopBtn:document.getElementById('stopBtn'),manualBtn:document.getElementById('manualBtn'),
+  cvStatus:document.getElementById('cvStatus'),statusBar:document.getElementById('statusBar'),statusMsg:document.getElementById('statusMsg'),
+  countdown:document.getElementById('countdown'),hud:document.getElementById('hud'),dEdges:document.getElementById('d-edges'),
+  dFocus:document.getElementById('d-focus'),dLight:document.getElementById('d-light'),dSize:document.getElementById('d-size'),
+  mFocus:document.getElementById('m-focus'),mLight:document.getElementById('m-light'),mSize:document.getElementById('m-size'),
+  vFocus:document.getElementById('v-focus'),vLight:document.getElementById('v-light'),vSize:document.getElementById('v-size'),
+  result:document.getElementById('result'),shot:document.getElementById('shot'),downloadBtn:document.getElementById('downloadBtn'),
+  retryBtn:document.getElementById('retryBtn')};
+function onCvReady(){cvReady=true;els.cvStatus.textContent='Motor de visión listo';els.cvStatus.style.color='var(--good)';els.startBtn.disabled=false;}
+if(window.cv&&cv.Mat){onCvReady();}else{const t=setInterval(()=>{if(window.cv&&cv.Mat){clearInterval(t);onCvReady();}},200);}
+els.startBtn.addEventListener('click',startCamera);
+els.stopBtn.addEventListener('click',()=>stopCamera(true));
+els.manualBtn.addEventListener('click',()=>capture('manual'));
+els.retryBtn.addEventListener('click',resetScan);
+els.downloadBtn.addEventListener('click',downloadShot);
+async function startCamera(){
+  if(!cvReady){alert('Espera a que cargue el motor de visión.');return;}
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:960}},audio:false});
+    els.video.srcObject=stream;await els.video.play();
+    els.idle.style.display='none';els.statusBar.style.display='flex';els.hud.style.display='flex';
+    els.startBtn.disabled=true;els.stopBtn.disabled=false;els.manualBtn.disabled=false;
+    running=true;captured=false;goodStreak=0;requestAnimationFrame(loop);
+  }catch(err){els.idleMsg.textContent='No se pudo acceder a la cámara: '+err.message+'. Revisa los permisos del navegador.';}
+}
+function stopCamera(showIdle){
+  running=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  els.startBtn.disabled=false;els.stopBtn.disabled=true;els.manualBtn.disabled=true;
+  els.hud.style.display='none';els.statusBar.style.display='none';els.detected.setAttribute('points','');
+  if(showIdle){els.idle.style.display='flex';els.idleMsg.textContent='Cámara detenida. Actívala de nuevo cuando quieras.';}
+}
+function resetScan(){els.result.classList.remove('show');captured=false;goodStreak=0;startCamera();}
+function setBar(el,valEl,pct,text){el.style.width=Math.max(0,Math.min(100,pct))+'%';
+  el.style.background=pct>=66?'var(--good)':pct>=33?'var(--warn)':'var(--bad)';valEl.textContent=text;}
+function setDot(el,ok){el.className='dot '+(ok?'ok':'no');}
+function loop(ts){if(!running)return;if(ts-lastProcess>=CFG.processEveryMs){lastProcess=ts;analyze();}requestAnimationFrame(loop);}
+function analyze(){
+  const v=els.video;if(v.videoWidth===0)return;
+  const w=els.work.width=480;const h=els.work.height=Math.round(480*v.videoHeight/v.videoWidth);
+  const ctx=els.work.getContext('2d');ctx.drawImage(v,0,0,w,h);
+  let src=cv.imread(els.work);let gray=new cv.Mat();cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+  let lap=new cv.Mat();cv.Laplacian(gray,lap,cv.CV_64F);
+  let mean=new cv.Mat(),std=new cv.Mat();cv.meanStdDev(lap,mean,std);
+  const focusVar=Math.pow(std.doubleAt(0,0),2);
+  let mMean=new cv.Mat(),mStd=new cv.Mat();cv.meanStdDev(gray,mMean,mStd);
+  const bright=mMean.doubleAt(0,0);
+  let blur=new cv.Mat(),edges=new cv.Mat();cv.GaussianBlur(gray,blur,new cv.Size(5,5),0);cv.Canny(blur,edges,60,160);
+  let contours=new cv.MatVector(),hierarchy=new cv.Mat();
+  cv.findContours(edges,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+  let best=null,bestArea=0;const frameArea=w*h;
+  for(let i=0;i<contours.size();i++){const c=contours.get(i);const area=cv.contourArea(c);
+    if(area>bestArea){let peri=cv.arcLength(c,true);let approx=new cv.Mat();cv.approxPolyDP(c,approx,0.02*peri,true);
+      if(approx.rows===4&&area>bestArea){if(best)best.delete();best=approx;bestArea=area;}else{approx.delete();}c.delete();
+    }else c.delete();}
+  const areaRatio=bestArea/frameArea;let quad=null;
+  if(best){quad=[];for(let i=0;i<4;i++){quad.push({x:best.intAt(i,0),y:best.intAt(i,1)});}}
+  const okFocus=focusVar>=CFG.focusMin;
+  const okLight=bright>=CFG.brightMin&&bright<=CFG.brightMax;
+  const okSize=areaRatio>=CFG.areaMin&&areaRatio<=CFG.areaMax;
+  const okEdges=!!quad;
+  setDot(els.dEdges,okEdges);setDot(els.dFocus,okFocus);setDot(els.dLight,okLight);setDot(els.dSize,okSize);
+  setBar(els.mFocus,els.vFocus,(focusVar/CFG.focusMin)*55,Math.round(focusVar));
+  const lightPct=bright<CFG.brightMin?(bright/CFG.brightMin)*50:bright>CFG.brightMax?Math.max(0,100-(bright-CFG.brightMax)):80;
+  setBar(els.mLight,els.vLight,lightPct,Math.round(bright));
+  setBar(els.mSize,els.vSize,(areaRatio/CFG.areaMin)*55,Math.round(areaRatio*100)+'%');
+  if(quad){const pts=quad.map(p=>`${(p.x/w*100).toFixed(1)},${(p.y/h*100).toFixed(1)}`).join(' ');els.detected.setAttribute('points',pts);}
+  else{els.detected.setAttribute('points','');}
+  let msg='Buscando documento…';
+  if(!okEdges)msg='Muestra el DNI completo a la cámara';
+  else if(!okSize&&areaRatio<CFG.areaMin)msg='Acerca un poco el documento';
+  else if(!okSize)msg='Aleja un poco el documento';
+  else if(!okFocus)msg='Mantenlo quieto para enfocar';
+  else if(!okLight&&bright<CFG.brightMin)msg='Necesita más luz';
+  else if(!okLight)msg='Demasiada luz / reflejo';
+  else msg='Perfecto, no te muevas…';
+  els.statusMsg.textContent=msg;
+  const allGood=okFocus&&okLight&&okSize&&okEdges;
+  if(allGood){goodStreak++;const remain=Math.max(0,CFG.stableFrames-goodStreak);
+    els.countdown.style.display='inline-block';els.countdown.textContent=remain>0?'Capturando…':'¡Listo!';
+    if(goodStreak>=CFG.stableFrames&&!captured){capture('auto');}
+  }else{goodStreak=0;els.countdown.style.display='none';}
+  src.delete();gray.delete();lap.delete();mean.delete();std.delete();mMean.delete();mStd.delete();
+  blur.delete();edges.delete();contours.delete();hierarchy.delete();if(best)best.delete();
+}
+function capture(mode){
+  if(captured)return;captured=true;const v=els.video;const c=document.createElement('canvas');
+  c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+  const dataURL=c.toDataURL('image/jpeg',0.95);els.shot.src=dataURL;els.shot.dataset.url=dataURL;
+  els.result.classList.add('show');els.result.scrollIntoView({behavior:'smooth',block:'center'});
+  stopCamera(false);els.idle.style.display='flex';els.idleMsg.textContent='Captura realizada. Puedes escanear de nuevo cuando quieras.';
+}
+function downloadShot(){const a=document.createElement('a');a.href=els.shot.dataset.url;a.download='dni-captura.jpg';a.click();}
+</script>
+</body>
+</html>
