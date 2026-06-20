@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Captura de DNI</title>
+<script src="https://docs.opencv.org/4.x/opencv.js"></script>
+<script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  :root{
+    --ink:#10221b; --paper:#f3efe6; --paper-soft:#e8e2d4; --line:#c9c1ad;
+    --accent:#1f7a5c; --accent-deep:#0f4a37; --warn:#b8742a; --bad:#a23b3b;
+    --good:#1f7a5c; --mono:"SF Mono",ui-monospace,"Roboto Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{background:radial-gradient(120% 80% at 50% -10%, #fbf8f1 0%, var(--paper) 55%, var(--paper-soft) 100%);
+    color:var(--ink);font-family:"Inter",system-ui,-apple-system,sans-serif;min-height:100%;
+    display:flex;flex-direction:column;align-items:center;padding:24px 16px 48px;-webkit-font-smoothing:antialiased;}
+  header{width:100%;max-width:620px;margin-bottom:18px;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent-deep);opacity:.8;}
+  h1{font-size:30px;line-height:1.05;font-weight:680;letter-spacing:-.02em;margin:6px 0 4px;}
+  .sub{font-size:14px;color:#5a6b62;max-width:46ch;}
+  .stage{width:100%;max-width:620px;background:#0c1611;border:1px solid var(--line);border-radius:18px;
+    overflow:hidden;position:relative;aspect-ratio:4/3;box-shadow:0 20px 50px -28px rgba(15,74,55,.6);}
+  video,canvas#work{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas#work{visibility:hidden;}
+  #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+  .idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:16px;color:var(--paper);text-align:center;padding:24px;background:radial-gradient(80% 60% at 50% 40%,#16271f,#0c1611);}
+  .idle p{font-size:13px;color:#9db3a8;max-width:34ch;}
+  .hud{position:absolute;left:12px;right:12px;bottom:12px;display:flex;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;}
+  .chip{background:rgba(8,18,13,.72);border:1px solid rgba(255,255,255,.12);color:#cfe0d8;padding:6px 9px;
+    border-radius:999px;display:flex;align-items:center;gap:6px;backdrop-filter:blur(6px);}
+  .dot{width:7px;height:7px;border-radius:50%;background:#7d8a83;}
+  .dot.ok{background:var(--good);box-shadow:0 0 8px var(--good);}
+  .dot.no{background:var(--bad);}
+  .status{position:absolute;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;
+    align-items:center;font-family:var(--mono);font-size:12px;color:var(--paper);}
+  .status .msg{background:rgba(8,18,13,.72);padding:6px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(6px);}
+  .countdown{background:var(--accent);color:#fff;font-weight:600;padding:6px 11px;border-radius:999px;}
+  .controls{width:100%;max-width:620px;margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  button{font:inherit;font-weight:600;font-size:14px;border:none;border-radius:12px;padding:13px 20px;
+    cursor:pointer;transition:transform .08s ease, background .2s ease, opacity .2s;}
+  button:active{transform:translateY(1px);}
+  .btn-primary{background:var(--accent-deep);color:#fff;}
+  .btn-primary:hover{background:var(--accent);}
+  .btn-ghost{background:transparent;color:var(--accent-deep);border:1px solid var(--line);}
+  button:disabled{opacity:.4;cursor:not-allowed;}
+  .criteria{width:100%;max-width:620px;margin-top:22px;border-top:1px solid var(--line);padding-top:18px;}
+  .criteria h2{font-size:12px;font-family:var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--accent-deep);margin-bottom:12px;}
+  .meters{display:grid;gap:10px;}
+  .meter{display:grid;grid-template-columns:120px 1fr 52px;gap:10px;align-items:center;font-size:13px;}
+  .meter .label{color:#41524a;}
+  .bar{height:8px;background:var(--paper-soft);border-radius:999px;overflow:hidden;border:1px solid var(--line);}
+  .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .12s linear, background .2s;}
+  .meter .val{font-family:var(--mono);font-size:11px;text-align:right;color:#5a6b62;}
+  .result{width:100%;max-width:620px;margin-top:22px;display:none;}
+  .result.show{display:block;}
+  .result h2{font-size:18px;margin-bottom:10px;letter-spacing:-.01em;}
+  .shot{width:100%;border-radius:14px;border:1px solid var(--line);display:block;}
+  .result-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;}
+  .loading-cv{font-family:var(--mono);font-size:12px;color:var(--warn);margin-top:10px;}
+  .ocr-status{font-family:var(--mono);font-size:12px;color:var(--warn);margin-top:14px;display:flex;align-items:center;gap:8px;}
+  .ocr-status.done{color:var(--good);}
+  .ocr-status.fail{color:var(--bad);}
+  .spinner{width:13px;height:13px;border:2px solid var(--paper-soft);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .data-card{margin-top:16px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px;}
+  .data-card h3{font-size:13px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent-deep);margin-bottom:14px;}
+  .data-card dl{display:grid;grid-template-columns:auto 1fr;gap:9px 18px;margin:0;}
+  .data-card dt{font-size:12px;color:#7a8881;text-transform:uppercase;letter-spacing:.04em;align-self:center;}
+  .data-card dd{margin:0;font-size:16px;font-weight:600;color:var(--ink);letter-spacing:-.01em;}
+  .data-card dd.empty{font-weight:400;color:#b3aa96;font-style:italic;}
+  .ocr-note{margin-top:14px;font-size:11px;color:#9aa49d;border-top:1px solid var(--paper-soft);padding-top:10px;}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">Captura asistida</div>
+  <h1>Escanea tu DNI</h1>
+  <p class="sub">Activa la cámara y sostén el documento frente a ella. La foto se toma sola cuando el encuadre, el enfoque y la luz son correctos.</p>
+</header>
+<div class="stage" id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="work"></canvas>
+  <svg id="overlay" viewBox="0 0 100 75" preserveAspectRatio="none">
+    <rect id="guide" x="14" y="14.8" width="72" height="45.4" rx="3" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.6" stroke-dasharray="3 2"/>
+    <polygon id="detected" points="" fill="rgba(31,122,92,0.18)" stroke="#37d39a" stroke-width="0.8"/>
+  </svg>
+  <div class="status" id="statusBar" style="display:none;">
+    <span class="msg" id="statusMsg">Buscando documento…</span>
+    <span class="countdown" id="countdown" style="display:none;">Listo</span>
+  </div>
+  <div class="hud" id="hud" style="display:none;">
+    <span class="chip"><span class="dot" id="d-edges"></span>Documento</span>
+    <span class="chip"><span class="dot" id="d-focus"></span>Enfoque</span>
+    <span class="chip"><span class="dot" id="d-light"></span>Luz</span>
+    <span class="chip"><span class="dot" id="d-size"></span>Tamaño</span>
+  </div>
+  <div class="idle" id="idle">
+    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#37d39a" stroke-width="1.4">
+      <rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="12.5" r="3.2"/><path d="M8 6l1.2-2h5.6L16 6"/>
+    </svg>
+    <p id="idleMsg">La cámara está apagada. Dale a “Activar cámara” y permite el acceso cuando el navegador lo pida.</p>
+  </div>
+</div>
+<div class="controls">
+  <button class="btn-primary" id="startBtn">Activar cámara</button>
+  <button class="btn-ghost" id="stopBtn" disabled>Detener</button>
+  <button class="btn-ghost" id="manualBtn" disabled>Capturar ahora</button>
+  <span class="loading-cv" id="cvStatus">Cargando motor de visión…</span>
+</div>
+<div class="criteria">
+  <h2>Calidad en vivo</h2>
+  <div class="meters">
+    <div class="meter"><span class="label">Enfoque</span><div class="bar"><i id="m-focus"></i></div><span class="val" id="v-focus">—</span></div>
+    <div class="meter"><span class="label">Luz</span><div class="bar"><i id="m-light"></i></div><span class="val" id="v-light">—</span></div>
+    <div class="meter"><span class="label">Encuadre</span><div class="bar"><i id="m-size"></i></div><span class="val" id="v-size">—</span></div>
+  </div>
+</div>
+<div class="result" id="result">
+  <h2>Captura lista</h2>
+  <img class="shot" id="shot" alt="Captura del DNI">
+  <div id="ocrStatus" class="ocr-status">Leyendo los datos del documento…</div>
+  <div id="dataCard" class="data-card" style="display:none;">
+    <h3>Datos detectados</h3>
+    <dl id="dataFields"></dl>
+    <p class="ocr-note">Lectura automática. Verifica siempre contra el documento original.</p>
+  </div>
+  <div class="result-actions">
+    <button class="btn-primary" id="downloadBtn">Descargar imagen</button>
+    <button class="btn-ghost" id="retryBtn">Escanear de nuevo</button>
+  </div>
+</div>
+<script>
+const CFG = {
+  focusMin: 60,            // nitidez mínima en la zona del documento
+  brightMin: 55, brightMax: 215,
+  stableFrames: 16,        // ~1.3s de estabilidad
+  processEveryMs: 80,
+  // El recuadro guía donde el usuario pone el DNI (en fracción del cuadro, debe coincidir con el SVG)
+  roi: { x:0.14, y:0.197, w:0.72, h:0.605 },
+  // --- Señales para confirmar que es un DOCUMENTO y no una cara/mano ---
+  edgeDensityMin: 0.050,   // +~10%: exige un poco más de textura tipo texto
+  edgeDensityMax: 0.40,    // demasiada densidad = ruido, no documento
+  uniformityMax: 63,       // -~10%: superficie debe ser más plana (rechaza mejor cara/mano)
+  rectRequired: false,     // el rectángulo ya NO es obligatorio: ayuda pero no bloquea
+  aspectTarget: 85.60/53.98,
+  aspectTolerance: 0.9,    // más tolerante con la proporción
+  rectFillMin: 0.5,        // más tolerante con bordes redondeados / contorno incompleto
+};
+let cvReady=false, stream=null, running=false, goodStreak=0, lastProcess=0, captured=false;
+const els={video:document.getElementById('video'),work:document.getElementById('work'),overlay:document.getElementById('overlay'),
+  detected:document.getElementById('detected'),idle:document.getElementById('idle'),idleMsg:document.getElementById('idleMsg'),
+  startBtn:document.getElementById('startBtn'),stopBtn:document.getElementById('stopBtn'),manualBtn:document.getElementById('manualBtn'),
+  cvStatus:document.getElementById('cvStatus'),statusBar:document.getElementById('statusBar'),statusMsg:document.getElementById('statusMsg'),
+  countdown:document.getElementById('countdown'),hud:document.getElementById('hud'),dEdges:document.getElementById('d-edges'),
+  dFocus:document.getElementById('d-focus'),dLight:document.getElementById('d-light'),dSize:document.getElementById('d-size'),
+  mFocus:document.getElementById('m-focus'),mLight:document.getElementById('m-light'),mSize:document.getElementById('m-size'),
+  vFocus:document.getElementById('v-focus'),vLight:document.getElementById('v-light'),vSize:document.getElementById('v-size'),
+  result:document.getElementById('result'),shot:document.getElementById('shot'),downloadBtn:document.getElementById('downloadBtn'),
+  retryBtn:document.getElementById('retryBtn')};
+function onCvReady(){cvReady=true;els.cvStatus.textContent='Motor de visión listo';els.cvStatus.style.color='var(--good)';els.startBtn.disabled=false;}
+if(window.cv&&cv.Mat){onCvReady();}else{const t=setInterval(()=>{if(window.cv&&cv.Mat){clearInterval(t);onCvReady();}},200);}
+els.startBtn.addEventListener('click',startCamera);
+els.stopBtn.addEventListener('click',()=>stopCamera(true));
+els.manualBtn.addEventListener('click',()=>capture('manual'));
+els.retryBtn.addEventListener('click',resetScan);
+els.downloadBtn.addEventListener('click',downloadShot);
+async function startCamera(){
+  if(!cvReady){alert('Espera a que cargue el motor de visión.');return;}
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:960}},audio:false});
+    els.video.srcObject=stream;await els.video.play();
+    els.idle.style.display='none';els.statusBar.style.display='flex';els.hud.style.display='flex';
+    els.startBtn.disabled=true;els.stopBtn.disabled=false;els.manualBtn.disabled=false;
+    running=true;captured=false;goodStreak=0;requestAnimationFrame(loop);
+  }catch(err){els.idleMsg.textContent='No se pudo acceder a la cámara: '+err.message+'. Revisa los permisos del navegador.';}
+}
+function stopCamera(showIdle){
+  running=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  els.startBtn.disabled=false;els.stopBtn.disabled=true;els.manualBtn.disabled=true;
+  els.hud.style.display='none';els.statusBar.style.display='none';els.detected.setAttribute('points','');
+  if(showIdle){els.idle.style.display='flex';els.idleMsg.textContent='Cámara detenida. Actívala de nuevo cuando quieras.';}
+}
+function resetScan(){els.result.classList.remove('show');captured=false;goodStreak=0;startCamera();}
+function setBar(el,valEl,pct,text){el.style.width=Math.max(0,Math.min(100,pct))+'%';
+  el.style.background=pct>=66?'var(--good)':pct>=33?'var(--warn)':'var(--bad)';valEl.textContent=text;}
+function setDot(el,ok){el.className='dot '+(ok?'ok':'no');}
+function rotatedRectPoints(rect){
+  // Calcula los 4 vértices de un minAreaRect de forma robusta,
+  // sin depender de cv.RotatedRect.points (que varía entre versiones de OpenCV.js).
+  const cx=rect.center.x, cy=rect.center.y;
+  const w=rect.size.width/2, h=rect.size.height/2;
+  const a=rect.angle*Math.PI/180;
+  const cosA=Math.cos(a), sinA=Math.sin(a);
+  const corners=[[-w,-h],[w,-h],[w,h],[-w,h]];
+  return corners.map(([dx,dy])=>({
+    x: cx + dx*cosA - dy*sinA,
+    y: cy + dx*sinA + dy*cosA
+  }));
+}
+function rectMetrics(rect){
+  // rect = {size:{width,height}, angle}; devuelve aspecto (lado largo / lado corto) y área
+  const rw=rect.size.width, rh=rect.size.height;
+  if(rw===0||rh===0) return {aspect:0, area:0};
+  const aspect = rw>rh ? rw/rh : rh/rw;
+  return {aspect, area: rw*rh};
+}
+function loop(ts){if(!running)return;if(ts-lastProcess>=CFG.processEveryMs){lastProcess=ts;analyze();}requestAnimationFrame(loop);}
+function analyze(){
+  const v=els.video;if(v.videoWidth===0)return;
+  const w=els.work.width=480;const h=els.work.height=Math.round(480*v.videoHeight/v.videoWidth);
+  const ctx=els.work.getContext('2d');ctx.drawImage(v,0,0,w,h);
+  let src=cv.imread(els.work);let gray=new cv.Mat();cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+
+  // --- Recorte a la ZONA GUÍA (ROI): aquí es donde el usuario pone el DNI ---
+  const rx=Math.round(CFG.roi.x*w), ry=Math.round(CFG.roi.y*h);
+  const rw=Math.round(CFG.roi.w*w), rh=Math.round(CFG.roi.h*h);
+  let roiRect=new cv.Rect(rx,ry,rw,rh);
+  let roi=gray.roi(roiRect);   // solo la zona del documento
+
+  // --- Enfoque: nitidez DENTRO de la zona guía ---
+  let lap=new cv.Mat();cv.Laplacian(roi,lap,cv.CV_64F);
+  let mean=new cv.Mat(),std=new cv.Mat();cv.meanStdDev(lap,mean,std);
+  const focusVar=Math.pow(std.doubleAt(0,0),2);
+
+  // --- Luz + uniformidad: un documento es plano/uniforme; una cara/mano varía mucho ---
+  let mMean=new cv.Mat(),mStd=new cv.Mat();cv.meanStdDev(roi,mMean,mStd);
+  const bright=mMean.doubleAt(0,0);
+  const uniformity=mStd.doubleAt(0,0);   // desviación estándar de brillo en la zona guía
+
+  // --- Contenido: cuánta "textura/bordes" hay en la zona guía ---
+  // Un documento tiene texto, foto, líneas => muchos bordes. Una pared vacía => casi ninguno.
+  let roiBlur=new cv.Mat(),roiEdges=new cv.Mat();
+  cv.GaussianBlur(roi,roiBlur,new cv.Size(3,3),0);
+  cv.Canny(roiBlur,roiEdges,40,120);
+  const edgePixels=cv.countNonZero(roiEdges);
+  const contentFill=edgePixels/(rw*rh);   // fracción de píxeles con borde
+  // normalizamos: 0.06 de densidad de bordes ya es un documento bien lleno
+  const contentScore=Math.min(1, contentFill/0.06);
+
+  // --- Bordes del documento: OPCIONAL, solo para dibujar y dar pista visual ---
+  let blur=new cv.Mat(),edges=new cv.Mat();cv.GaussianBlur(gray,blur,new cv.Size(5,5),0);cv.Canny(blur,edges,35,110);
+  let kernel=cv.Mat.ones(7,7,cv.CV_8U);let dil=new cv.Mat();
+  cv.dilate(edges,dil,kernel,new cv.Point(-1,-1),2);
+  let contours=new cv.MatVector(),hierarchy=new cv.Mat();
+  cv.findContours(dil,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+  const frameArea=w*h;
+  let best=null,bestArea=0,bestFill=0,bestAspect=0;
+  for(let i=0;i<contours.size();i++){
+    const c=contours.get(i);
+    const cArea=cv.contourArea(c);
+    if(cArea < frameArea*0.08){ c.delete(); continue; }
+    const rect=cv.minAreaRect(c);
+    const {aspect,area:rectArea}=rectMetrics(rect);
+    const fill = rectArea>0 ? cArea/rectArea : 0;
+    const aspectOk = Math.abs(aspect-CFG.aspectTarget) <= CFG.aspectTolerance;
+    const fillOk = fill >= CFG.rectFillMin;
+    if(aspectOk && fillOk && rectArea>bestArea){
+      bestArea=rectArea; bestFill=fill; bestAspect=aspect;
+      best=rotatedRectPoints(rect);
+    }
+    c.delete();
+  }
+  let quad=null;
+  if(best){ quad=best.map(p=>({x:p.x,y:p.y})); }
+
+  // --- Criterios para confirmar que es un DOCUMENTO (no cara/mano) ---
+  const okFocus = focusVar>=CFG.focusMin;
+  const okLight = bright>=CFG.brightMin && bright<=CFG.brightMax;
+  // (a) densidad de bordes dentro del rango propio de texto/documento
+  const okTexture = contentFill>=CFG.edgeDensityMin && contentFill<=CFG.edgeDensityMax;
+  // (b) superficie plana/uniforme (una cara tiene sombras y volumen => std alta)
+  const okUniform = uniformity<=CFG.uniformityMax;
+  // (c) se ve el rectángulo del documento con proporción de tarjeta
+  const edgesFound = !!quad;
+  const okRect = CFG.rectRequired ? edgesFound : true;
+  // Para los indicadores del HUD:
+  const okContent = okTexture && okUniform;   // "Documento": parece un DNI, no una cara
+  // El encuadre se valida si hay un documento bien presente; el rectángulo es un bonus visual.
+  const okSize = okContent;                    // "Encuadre"
+  const okEdges = okContent;                   // indicador "Documento"
+  setDot(els.dEdges,okEdges);setDot(els.dFocus,okFocus);setDot(els.dLight,okLight);setDot(els.dSize,okSize);
+  setBar(els.mFocus,els.vFocus,(focusVar/CFG.focusMin)*55,Math.round(focusVar));
+  const lightPct=bright<CFG.brightMin?(bright/CFG.brightMin)*50:bright>CFG.brightMax?Math.max(0,100-(bright-CFG.brightMax)):80;
+  setBar(els.mLight,els.vLight,lightPct,Math.round(bright));
+  // La barra de Encuadre sube con la textura del documento; si además se ve el contorno, llega al tope.
+  const sizePct = Math.min(100, contentScore*85 + (edgesFound?15:0));
+  setBar(els.mSize,els.vSize, sizePct, Math.round(sizePct)+'%');
+  // Dibujamos el contorno SOLO si los bordes se detectaron
+  if(quad){const pts=quad.map(p=>`${(p.x/w*100).toFixed(1)},${(p.y/h*100).toFixed(1)}`).join(' ');els.detected.setAttribute('points',pts);}
+  else{els.detected.setAttribute('points','');}
+  let msg='Coloca el DNI dentro del recuadro';
+  if(!okContent && !okUniform) msg='Eso no parece un documento — muestra el DNI';
+  else if(!okContent) msg='Acerca el DNI hasta llenar el recuadro';
+  else if(!okFocus) msg='Mantenlo quieto para enfocar';
+  else if(!okLight && bright<CFG.brightMin) msg='Necesita más luz';
+  else if(!okLight) msg='Demasiada luz / reflejo';
+  else msg='Perfecto, no te muevas…';
+  els.statusMsg.textContent=msg;
+  // Diagnóstico: activa escribiendo window.DEBUG_DNI=true en la consola del navegador
+  if(window.DEBUG_DNI){
+    console.log(`focus=${Math.round(focusVar)} | bright=${Math.round(bright)} | textura=${(contentFill*100).toFixed(2)}% (rango ${(CFG.edgeDensityMin*100)}-${(CFG.edgeDensityMax*100)}%) | uniformidad=${uniformity.toFixed(1)} (max ${CFG.uniformityMax}) | rect=${edgesFound} | doc=${okContent}`);
+  }
+  const allGood=okFocus && okLight && okContent;
+  if(allGood){goodStreak++;const remain=Math.max(0,CFG.stableFrames-goodStreak);
+    els.countdown.style.display='inline-block';els.countdown.textContent=remain>0?'Capturando…':'¡Listo!';
+    if(goodStreak>=CFG.stableFrames&&!captured){capture('auto');}
+  }else{goodStreak=0;els.countdown.style.display='none';}
+  roi.delete();roiBlur.delete();roiEdges.delete();
+  src.delete();gray.delete();lap.delete();mean.delete();std.delete();mMean.delete();mStd.delete();
+  blur.delete();edges.delete();dil.delete();kernel.delete();contours.delete();hierarchy.delete();
+}
+function capture(mode){
+  if(captured)return;captured=true;const v=els.video;const c=document.createElement('canvas');
+  c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+  const dataURL=c.toDataURL('image/jpeg',0.95);els.shot.src=dataURL;els.shot.dataset.url=dataURL;
+  els.result.classList.add('show');els.result.scrollIntoView({behavior:'smooth',block:'center'});
+  stopCamera(false);els.idle.style.display='flex';els.idleMsg.textContent='Captura realizada. Puedes escanear de nuevo cuando quieras.';
+  runOCR(c);   // leer los datos sobre la foto a resolución completa
+}
+function downloadShot(){const a=document.createElement('a');a.href=els.shot.dataset.url;a.download='dni-captura.jpg';a.click();}
+
+// ---------- OCR + lectura del MRZ ----------
+const ocrStatus=document.getElementById('ocrStatus');
+const dataCard=document.getElementById('dataCard');
+const dataFields=document.getElementById('dataFields');
+
+function setOcrStatus(text, state){
+  ocrStatus.className='ocr-status'+(state?(' '+state):'');
+  ocrStatus.innerHTML = state==='done'||state==='fail' ? text : `<span class="spinner"></span>${text}`;
+}
+
+// Recorta una franja [yStart..yEnd] (fracciones) y la prepara para OCR
+function cropBand(sourceCanvas, yStartFrac, yEndFrac){
+  const sy=Math.round(sourceCanvas.height*yStartFrac);
+  const ey=Math.round(sourceCanvas.height*yEndFrac);
+  const sx=0, sw=sourceCanvas.width, sh=ey-sy;
+  const out=document.createElement('canvas');
+  const scale=3;                       // ampliamos x3: el OCR rinde mejor con texto grande
+  out.width=sw*scale; out.height=sh*scale;
+  const octx=out.getContext('2d');
+  octx.imageSmoothingEnabled=true;
+  octx.drawImage(sourceCanvas, sx,sy,sw,sh, 0,0,out.width,out.height);
+  // escala de grises + binarización adaptativa simple para resaltar el texto del MRZ
+  const img=octx.getImageData(0,0,out.width,out.height);const d=img.data;
+  // primero pasamos a gris y calculamos brillo promedio
+  let sum=0, n=out.width*out.height;
+  const grays=new Float32Array(n);
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    const g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+    grays[j]=g; sum+=g;
+  }
+  const avg=sum/n;
+  // umbral relativo al promedio: lo más oscuro que el promedio (el texto) => negro
+  const thr=avg*0.82;
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    const v = grays[j] < thr ? 0 : 255;
+    d[i]=d[i+1]=d[i+2]=v;
+  }
+  octx.putImageData(img,0,0);
+  return out;
+}
+
+async function runOCR(sourceCanvas){
+  if(typeof Tesseract==='undefined'){ setOcrStatus('No se pudo cargar el lector de texto.', 'fail'); return; }
+  setOcrStatus('Leyendo los datos del documento…');
+  dataCard.style.display='none';
+  const mrzOpts={ tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<' };
+  const bands=[ [0.45,0.85], [0.55,0.95], [0.35,0.75], [0.25,1.0] ];
+  try{
+    let best=null, bestScore=0;
+    // --- Camino 1: MRZ (DNI turquesa antiguo). Probamos varias franjas. ---
+    for(let k=0;k<bands.length;k++){
+      setOcrStatus(`Buscando el código del documento… (${k+1}/${bands.length})`);
+      const band=cropBand(sourceCanvas, bands[k][0], bands[k][1]);
+      const { data } = await Tesseract.recognize(band, 'eng', mrzOpts);
+      const f = parseMRZ(data.text);
+      const sc = scoreFields(f);
+      if(window.DEBUG_DNI) console.log(`MRZ franja ${bands[k]} -> ${sc}`, f, data.text);
+      if(sc>bestScore){ bestScore=sc; best=f; }
+      if(sc>=4) break;
+    }
+    // --- Camino 2: campos del frente (DNIe nuevo). Lee toda la tarjeta como texto normal. ---
+    if(bestScore<4){
+      setOcrStatus('Leyendo los campos del documento…');
+      const big=upscale(sourceCanvas, 2);   // ampliar mejora la lectura del texto fino
+      const { data:front } = await Tesseract.recognize(big, 'eng');  // sin whitelist: texto normal
+      const ff = parseFront(front.text);
+      const sf = scoreFields(ff);
+      if(window.DEBUG_DNI) console.log('FRENTE -> '+sf, ff, front.text);
+      if(sf>bestScore){ bestScore=sf; best=ff; }
+    }
+    // --- Resultado ---
+    if(best && bestScore>=2){
+      showFields(best);
+      setOcrStatus(bestScore>=4?'Datos leídos correctamente.':'Datos leídos (verifica los que falten).', 'done');
+    } else {
+      showFields({ 'Aviso':'No se pudieron leer los datos. Repite la captura con buena luz, el DNI bien enfocado y sin reflejos.' });
+      setOcrStatus('No se pudieron leer los datos.', 'fail');
+    }
+  }catch(err){
+    setOcrStatus('No se pudieron leer los datos: '+err.message, 'fail');
+  }
+}
+
+// Cuenta cuántos campos válidos se extrajeron (para elegir la mejor franja)
+function scoreFields(f){
+  if(!f) return 0;
+  let s=0;
+  if(f['Número de DNI'] && /^\d{6,9}$/.test(f['Número de DNI'])) s+=2;  // el más importante
+  if(f['Apellidos']) s++;
+  if(f['Nombres']) s++;
+  if(f['Fecha de nacimiento']) s++;
+  if(f['Fecha de vencimiento']) s++;
+  if(f['Sexo']) s++;
+  return s;
+}
+
+// Amplía toda la imagen (mejora OCR de texto fino del DNIe)
+function upscale(sourceCanvas, factor){
+  const out=document.createElement('canvas');
+  out.width=sourceCanvas.width*factor; out.height=sourceCanvas.height*factor;
+  const c=out.getContext('2d'); c.imageSmoothingEnabled=true;
+  c.drawImage(sourceCanvas,0,0,out.width,out.height);
+  return out;
+}
+
+// Parser de los campos del FRENTE (DNIe nuevo): lee por etiquetas impresas.
+function parseFront(text){
+  if(!text) return null;
+  const T=text.replace(/\r/g,'');
+  const up=T.toUpperCase();
+  const out={};
+  function after(labels, valuePattern){
+    for(const lab of labels){
+      const re=new RegExp(lab+'[^A-Z0-9]*('+valuePattern+')','i');
+      const m=T.match(re);
+      if(m&&m[1]) return m[1].trim();
+    }
+    return null;
+  }
+  // CUI / número: 8 dígitos (a veces con guion y dígito verificador)
+  const cui=up.match(/\b(\d{8})\s*-\s*\d\b/)||up.match(/\b(\d{8})\b/);
+  if(cui) out['Número de DNI']=cui[1];
+  // Apellidos / Prenombres
+  const ape=after(['Apellidos'],'[A-ZÑ][A-ZÑ ]{3,40}');
+  if(ape) out['Apellidos']=ape.replace(/\s+/g,' ').trim();
+  const nom=after(['Prenombres','Pre Nombres','Nombres'],'[A-ZÑ][A-ZÑ ]{2,40}');
+  if(nom) out['Nombres']=nom.replace(/\s+/g,' ').trim();
+  // Sexo: "M PER" / "F PER" (sexo junto a nacionalidad) o tras la etiqueta Sexo
+  let sx=(up.match(/\b([MF])\s+PER\b/)||[])[1]||after(['Sexo'],'[MF]');
+  if(sx) out['Sexo']=sx==='M'?'Masculino':'Femenino';
+  // Fecha de nacimiento: tras la etiqueta, o la fecha que sigue a "PER"
+  const fnac=after(['Fecha de nacimiento','nacimiento'],'\\d{2}[ /.]\\d{2}[ /.]\\d{4}')
+          ||(up.match(/PER\s+(\d{2}[ /.]\d{2}[ /.]\d{4})/)||[])[1];
+  if(fnac) out['Fecha de nacimiento']=fnac.replace(/[ .]/g,'/');
+  // Fecha de caducidad / vencimiento
+  const fven=after(['Fecha de caducidad','caducidad','vencimiento'],'\\d{2}[ /.]\\d{2}[ /.]\\d{4}');
+  if(fven) out['Fecha de vencimiento']=fven.replace(/[ .]/g,'/');
+  return out;
+}
+
+// Parsea las 3 líneas del MRZ (formato TD1, el del DNI peruano)
+function parseMRZ(text){
+  if(!text) return null;
+  const clean = text.toUpperCase().replace(/[^A-Z0-9<\n]/g,'');
+  const lines = clean.split('\n').map(l=>l.trim()).filter(l=>l.length>=10 && l.includes('<'));
+  if(lines.length<2) return null;
+  const out={};
+  // Línea 1: tipo + país + número de documento.  Ej: I<PER73012549<1<<<...
+  const l1 = lines.find(l=>/PER/.test(l)) || lines[0];
+  const docMatch = l1.replace(/</g,' ').match(/PER\s*([A-Z0-9]{6,12})/);
+  if(docMatch) out['Número de DNI'] = docMatch[1].replace(/O/g,'0');
+  // Línea con fecha de nacimiento + sexo + vencimiento. Ej: 0204059F2706111PER...
+  // Debe EMPEZAR con 6 dígitos + dígito control + sexo (M/F) + 6 dígitos.
+  const l2 = lines.find(l=>/^\d{6}\d[MF]\d{6}/.test(l));
+  if(l2){
+    const m=l2.match(/^(\d{6})\d([MF])(\d{6})/);
+    if(m){
+      out['Fecha de nacimiento'] = fmtDate(m[1]);
+      out['Sexo'] = m[2]==='M'?'Masculino':'Femenino';
+      out['Fecha de vencimiento'] = fmtDate(m[3]);
+    }
+  }
+  // Línea de nombres: APELLIDOS<<NOMBRES
+  const lN = lines.find(l=>l.includes('<<') && /^[A-Z<]+$/.test(l));
+  if(lN){
+    const [ape,nom] = lN.split('<<');
+    if(ape) out['Apellidos'] = ape.replace(/</g,' ').trim();
+    if(nom) out['Nombres'] = nom.replace(/</g,' ').trim();
+  }
+  return out;
+}
+
+// Convierte AAMMDD del MRZ a fecha legible
+function fmtDate(s){
+  if(!/^\d{6}$/.test(s)) return s;
+  let yy=+s.slice(0,2), mm=s.slice(2,4), dd=s.slice(4,6);
+  const year = yy>40 ? 1900+yy : 2000+yy;   // heurística de siglo
+  return `${dd}/${mm}/${year}`;
+}
+
+function showFields(fields){
+  dataFields.innerHTML='';
+  const order=['Número de DNI','Apellidos','Nombres','Fecha de nacimiento','Sexo','Fecha de vencimiento','Texto leído'];
+  const keys=[...order.filter(k=>k in fields), ...Object.keys(fields).filter(k=>!order.includes(k))];
+  for(const k of keys){
+    const dt=document.createElement('dt');dt.textContent=k;
+    const dd=document.createElement('dd');
+    const val=fields[k];
+    if(val && val!=='—'){dd.textContent=val;} else {dd.textContent='No detectado';dd.className='empty';}
+    dataFields.appendChild(dt);dataFields.appendChild(dd);
+  }
+  dataCard.style.display='block';
+}
+</script>
+</body>
+</html>
